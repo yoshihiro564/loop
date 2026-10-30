@@ -1,0 +1,483 @@
+<title>ループ連結機</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&family=IBM+Plex+Sans+JP:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: 1カラムの作業台。上から「素材 → 回数 → 書き出し」。中央に 2:00 × 30 = 1:00:00 の式と帯タイムライン */
+:root {
+  --bg: #0d1226;          /* 夜の藍 */
+  --panel: #151b35;
+  --line: #27304f;
+  --fg: #e6e8f2;
+  --muted: #9097b4;
+  --moon: #f1dfae;        /* 月明かり */
+  --moon-ink: #1a1a2a;
+  --ok: #8fd3b0;
+  --warn: #f0b77a;
+  --bad: #f08a8a;
+  --seg-a: #2b3768;
+  --seg-b: #34417a;
+  --f-display: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", "BIZ UDPGothic", sans-serif;
+  --f-body: "IBM Plex Sans JP", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f3f1ea; --panel: #fbfaf6; --line: #dcd8cb; --fg: #1d2240; --muted: #5d6385;
+    --moon: #2d3a7a; --moon-ink: #fbfaf6; --ok: #2c7a56; --warn: #a5601c; --bad: #b23b3b;
+    --seg-a: #c9cde6; --seg-b: #b6bcdf; color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f3f1ea; --panel: #fbfaf6; --line: #dcd8cb; --fg: #1d2240; --muted: #5d6385;
+  --moon: #2d3a7a; --moon-ink: #fbfaf6; --ok: #2c7a56; --warn: #a5601c; --bad: #b23b3b;
+  --seg-a: #c9cde6; --seg-b: #b6bcdf; color-scheme: light;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+label.field { white-space: nowrap; }
+label.field:has(#outname) { flex: 1; min-width: 0; }
+#outname { flex: 1; min-width: 0; width: auto; max-width: 420px; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 15px; line-height: 1.7;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+.wrap { max-width: 760px; margin: 0 auto; display: grid; gap: 28px; }
+header { display: grid; gap: 6px; }
+h1 { font-family: var(--f-display); font-weight: 700; font-size: clamp(28px, 6vw, 38px); margin: 0; letter-spacing: .04em; text-wrap: balance; }
+h1 .moon { display: inline-block; width: .8em; height: .8em; border-radius: 50%; box-shadow: inset -.22em -.08em 0 0 var(--moon); transform: rotate(-20deg); margin-right: .25em; vertical-align: -.02em; }
+.lead { margin: 0; color: var(--muted); max-width: 62ch; }
+h2 { font-family: var(--f-display); font-size: 17px; font-weight: 700; margin: 0; display: flex; gap: 10px; align-items: baseline; }
+h2 .step { font-family: var(--f-mono); font-size: 12px; color: var(--muted); letter-spacing: .08em; }
+section { display: grid; gap: 14px; }
+
+/* 素材 */
+.drop {
+  border: 1.5px dashed var(--line); border-radius: 14px; padding: 26px 20px; text-align: center;
+  background: var(--panel); cursor: pointer; transition: border-color .2s, background .2s; display: grid; gap: 6px;
+}
+.drop:hover, .drop.over { border-color: var(--moon); }
+.drop:focus-within { outline: 2px solid var(--moon); outline-offset: 3px; }
+.drop strong { font-family: var(--f-display); font-size: 17px; }
+.drop small { color: var(--muted); }
+.drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.facts div { background: var(--panel); padding: 10px 14px; min-width: 0; }
+.facts dt { font-size: 11px; color: var(--muted); letter-spacing: .06em; }
+.facts dd { margin: 0; font-family: var(--f-mono); font-size: 14px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.checks li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; font-size: 14px; }
+.checks .ic { font-family: var(--f-mono); font-weight: 500; }
+.checks .ok .ic { color: var(--ok); } .checks .warn .ic { color: var(--warn); } .checks .bad .ic { color: var(--bad); }
+.checks .note { color: var(--muted); font-size: 13px; display: block; }
+
+/* 回数 */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  font: inherit; font-size: 14px; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line);
+  background: transparent; color: var(--fg); cursor: pointer;
+}
+.chip[aria-pressed="true"] { background: var(--moon); color: var(--moon-ink); border-color: var(--moon); font-weight: 600; }
+.chip:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--moon); outline-offset: 2px; }
+.row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+label.field { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--muted); }
+input[type=number], input[type=text] {
+  font: inherit; font-family: var(--f-mono); font-size: 15px; background: var(--panel); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
+}
+input[type=number] { width: 90px; }
+input[type=text] { width: min(100%, 340px); }
+
+/* 式 */
+.equation {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 22px 20px 18px; display: grid; gap: 14px;
+}
+.eq { font-family: var(--f-mono); font-variant-numeric: tabular-nums; font-size: clamp(22px, 5.4vw, 34px); display: flex; flex-wrap: wrap; gap: .15em .5em; align-items: baseline; }
+.eq .op { color: var(--muted); font-size: .7em; }
+.eq .total { color: var(--moon); font-weight: 500; }
+.eq .tag { font-family: var(--f-body); font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; align-self: center; }
+.strip { display: flex; height: 18px; border-radius: 5px; overflow: hidden; gap: 1px; }
+.strip i { flex: 1; background: var(--seg-a); }
+.strip i:nth-child(even) { background: var(--seg-b); }
+.strip-legend { display: flex; justify-content: space-between; font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
+.sub { color: var(--muted); font-size: 13px; margin: 0; }
+
+/* 書き出し */
+.primary {
+  font: inherit; font-family: var(--f-display); font-weight: 700; font-size: 17px; letter-spacing: .04em;
+  padding: 13px 26px; border-radius: 12px; border: none; background: var(--moon); color: var(--moon-ink); cursor: pointer;
+}
+.primary:disabled { opacity: .4; cursor: not-allowed; }
+.ghost { font: inherit; font-size: 14px; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
+.status { font-size: 14px; min-height: 1.7em; margin: 0; }
+.status.err { color: var(--bad); } .status.done { color: var(--ok); }
+.bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.bar span { display: block; height: 100%; width: 0; background: var(--moon); transition: width .2s; }
+video { width: 100%; border-radius: 12px; background: #000; max-width: 100%; }
+.preview { display: grid; gap: 10px; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 18px; display: grid; gap: 6px; }
+footer p { margin: 0; max-width: 66ch; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1><span class="moon" aria-hidden="true"></span>ループ連結機</h1>
+    <p class="lead">2分のループ動画を指定回数ぶんつなげて、1時間の動画にします。再エンコードしないので画質・音質はそのまま、数秒で完了します。処理はすべてこのブラウザの中で行い、ファイルはどこにも送信しません。</p>
+  </header>
+
+  <section aria-labelledby="s1">
+    <h2 id="s1"><span class="step">STEP 1</span>マスター動画を選ぶ</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept="video/mp4,.mp4,.m4v,.mov">
+      <strong id="dropTitle">MP4ファイルをドロップ、またはクリックして選択</strong>
+      <small id="dropSub">例：sleep_loop_master_v2.mp4（2分・1920×1080）</small>
+    </label>
+    <dl class="facts" id="facts" hidden></dl>
+    <ul class="checks" id="checks" hidden></ul>
+  </section>
+
+  <section aria-labelledby="s2">
+    <h2 id="s2"><span class="step">STEP 2</span>仕上がりの長さ</h2>
+    <div class="chips" id="chips" role="group" aria-label="仕上がりの長さ">
+      <button class="chip" data-min="30">30分</button>
+      <button class="chip" data-min="60" aria-pressed="true">1時間</button>
+      <button class="chip" data-min="120">2時間</button>
+      <button class="chip" data-min="180">3時間</button>
+      <button class="chip" data-min="480">8時間</button>
+    </div>
+    <div class="row">
+      <label class="field" for="count">くり返し回数 <input type="number" id="count" min="1" max="2000" step="1" value="30"> 回</label>
+    </div>
+    <div class="equation" aria-live="polite">
+      <div class="eq"><span id="eqOne">2:00</span><span class="op">×</span><span id="eqN">30</span><span class="op">=</span><span class="total" id="eqTotal">1:00:00</span><span class="tag" id="eqTag">例</span></div>
+      <div class="strip" id="strip" aria-hidden="true"></div>
+      <div class="strip-legend"><span>0:00</span><span id="stripEnd">1:00:00</span></div>
+      <p class="sub" id="eqSize">出力サイズの目安：マスターを選ぶと表示されます</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s3">
+    <h2 id="s3"><span class="step">STEP 3</span>書き出す</h2>
+    <div class="row">
+      <label class="field" for="outname">ファイル名 <input type="text" id="outname" value="sleep_1hour.mp4"></label>
+    </div>
+    <div class="row">
+      <button class="primary" id="go" disabled>連結してMP4を作る</button>
+      <button class="ghost" id="again" hidden>もう一度保存</button>
+    </div>
+    <div class="bar" aria-hidden="true"><span id="bar"></span></div>
+    <p class="status" id="status" role="status"></p>
+    <div class="preview" id="preview" hidden>
+      <video id="vid" controls playsinline preload="metadata"></video>
+      <div class="row">
+        <button class="ghost" id="seekSeam">1つ目の継ぎ目の5秒前へ</button>
+        <button class="ghost" id="seekEnd">最後の30秒へ</button>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>仕組み：MP4の中の映像・音声データをそのまま並べ直し、時間情報だけを書き換えています。映像も音声も再圧縮しません。</p>
+    <p>対応形式：通常のMP4（H.264/H.265＋AAC など）。分割形式（fragmented MP4）には対応していません。</p>
+  </footer>
+</div>
+
+<script>
+(() => {
+"use strict";
+// ---------- バイナリ小道具 ----------
+const rd32 = (u, o) => ((u[o] << 24) | (u[o + 1] << 16) | (u[o + 2] << 8) | u[o + 3]) >>> 0;
+const rd64 = (u, o) => rd32(u, o) * 4294967296 + rd32(u, o + 4);
+const rdType = (u, o) => String.fromCharCode(u[o], u[o + 1], u[o + 2], u[o + 3]);
+const CONTAINERS = new Set(["moov", "trak", "mdia", "minf", "stbl", "edts"]);
+
+class W { // 可変長バイト列ライター
+  constructor(n = 1024) { this.b = new Uint8Array(n); this.n = 0; }
+  need(k) { if (this.n + k > this.b.length) { let m = this.b.length * 2; while (m < this.n + k) m *= 2; const nb = new Uint8Array(m); nb.set(this.b.subarray(0, this.n)); this.b = nb; } }
+  u8(v) { this.need(1); this.b[this.n++] = v; }
+  u32(v) { if (v < 0 || v > 0xFFFFFFFF || !Number.isFinite(v)) throw new Error("32bit overflow"); this.need(4); const b = this.b, n = this.n; b[n] = v >>> 24; b[n + 1] = (v >>> 16) & 255; b[n + 2] = (v >>> 8) & 255; b[n + 3] = v & 255; this.n += 4; }
+  u64(v) { this.u32(Math.floor(v / 4294967296)); this.u32(v % 4294967296); }
+  bytes(a) { this.need(a.length); this.b.set(a, this.n); this.n += a.length; }
+  out() { return this.b.slice(0, this.n); }
+}
+function box(type, payload) {
+  const w = new W(payload.length + 8); w.u32(payload.length + 8);
+  for (let i = 0; i < 4; i++) w.u8(type.charCodeAt(i));
+  w.bytes(payload); return w.out();
+}
+function concat(parts) {
+  let len = 0; for (const p of parts) len += p.length;
+  const o = new Uint8Array(len); let k = 0; for (const p of parts) { o.set(p, k); k += p.length; } return o;
+}
+
+function parse(u, start, end) {
+  const out = []; let o = start;
+  while (o + 8 <= end) {
+    let size = rd32(u, o), hdr = 8; const type = rdType(u, o + 4);
+    if (size === 1) { size = rd64(u, o + 8); hdr = 16; } else if (size === 0) size = end - o;
+    if (size < hdr || o + size > end) throw new Error("MP4の構造を読めませんでした（" + type + "）");
+    const node = { type, start: o, size, hdr };
+    if (CONTAINERS.has(type)) node.children = parse(u, o + hdr, o + size);
+    out.push(node); o += size;
+  }
+  return out;
+}
+const find = (nodes, t) => nodes && nodes.find(n => n.type === t);
+const path = (node, ...ts) => { let n = node; for (const t of ts) { n = find(n.children, t); if (!n) return null; } return n; };
+const body = (u, n) => u.subarray(n.start + n.hdr, n.start + n.size);
+
+// ---------- 解析 ----------
+function analyze(u) {
+  const top = parse(u, 0, u.length);
+  const ftyp = find(top, "ftyp"), moov = find(top, "moov");
+  if (!moov) throw new Error("moov ボックスが見つかりません。MP4ではない可能性があります。");
+  if (find(moov.children, "mvex") || find(top, "moof")) throw new Error("分割形式（fragmented MP4）には対応していません。通常のMP4で書き出し直してください。");
+  const mvhd = find(moov.children, "mvhd"), mb = body(u, mvhd);
+  const mv = mb[0];
+  const movieTimescale = mv === 1 ? rd32(mb, 20) : rd32(mb, 12);
+  const movieDuration = mv === 1 ? rd64(mb, 24) : rd32(mb, 16);
+  const tracks = [];
+  for (const trak of moov.children.filter(n => n.type === "trak")) {
+    const mdhd = path(trak, "mdia", "mdhd"), hdlr = path(trak, "mdia", "hdlr"), stbl = path(trak, "mdia", "minf", "stbl");
+    if (!mdhd || !stbl) continue;
+    const hb = body(u, mdhd), hv = hb[0];
+    const ts = hv === 1 ? rd32(hb, 20) : rd32(hb, 12), dur = hv === 1 ? rd64(hb, 24) : rd32(hb, 16);
+    const handler = hdlr ? rdType(body(u, hdlr), 8) : "????";
+    const g = t => find(stbl.children, t);
+    // stsz
+    const sz = body(u, g("stsz") || g("stz2"));
+    if (!g("stsz")) throw new Error("stz2 形式には未対応です");
+    const constSize = rd32(sz, 4), nSamples = rd32(sz, 8);
+    const sizes = new Uint32Array(nSamples);
+    for (let i = 0; i < nSamples; i++) sizes[i] = constSize || rd32(sz, 12 + i * 4);
+    // chunk offsets
+    const co = g("stco") || g("co64"); const cb = body(u, co); const is64 = co.type === "co64";
+    const nChunks = rd32(cb, 4), chunkOff = new Float64Array(nChunks);
+    for (let i = 0; i < nChunks; i++) chunkOff[i] = is64 ? rd64(cb, 8 + i * 8) : rd32(cb, 8 + i * 4);
+    // stsc
+    const sc = body(u, g("stsc")), nsc = rd32(sc, 4), stsc = [];
+    for (let i = 0; i < nsc; i++) stsc.push([rd32(sc, 8 + i * 12), rd32(sc, 12 + i * 12), rd32(sc, 16 + i * 12)]);
+    // データ範囲
+    let lo = Infinity, hi = 0, s = 0;
+    for (let c = 0, e = 0; c < nChunks; c++) {
+      while (e + 1 < stsc.length && stsc[e + 1][0] <= c + 1) e++;
+      let off = chunkOff[c];
+      for (let k = 0; k < stsc[e][1] && s < nSamples; k++, s++) { lo = Math.min(lo, off); off += sizes[s]; hi = Math.max(hi, off); }
+    }
+    // sync
+    const ss = g("stss"); let firstSync = true;
+    if (ss) { const sb = body(u, ss); firstSync = rd32(sb, 4) > 0 && rd32(sb, 8) === 1; }
+    // 編集リスト
+    const elst = path(trak, "edts", "elst"); let elstMediaTime = 0;
+    if (elst) { const eb = body(u, elst), ev = eb[0], n = rd32(eb, 4);
+      for (let i = 0; i < n; i++) { const mt = ev === 1 ? rd64(eb, 8 + i * 20 + 8) : rd32(eb, 8 + i * 12 + 4); if (mt !== 0xFFFFFFFF && mt < 2 ** 63) { elstMediaTime = mt; break; } } }
+    // コーデック名
+    const sd = g("stsd"); const codec = sd ? rdType(body(u, sd), 12) : "?";
+    let width = 0, height = 0;
+    const tk = find(trak.children, "tkhd"); if (tk) { const tb = body(u, tk); const L = tb.length; width = rd32(tb, L - 8) / 65536; height = rd32(tb, L - 4) / 65536; }
+    tracks.push({ trak, stbl, handler, ts, dur, nSamples, sizes, constSize, nChunks, chunkOff, stsc, lo, hi, firstSync, elstMediaTime, codec, width, height });
+  }
+  if (!tracks.length) throw new Error("映像・音声トラックが見つかりません");
+  const lo = Math.min(...tracks.map(t => t.lo)), hi = Math.max(...tracks.map(t => t.hi));
+  return { u, ftyp, moov, movieTimescale, movieDuration, tracks, lo, hi, span: hi - lo };
+}
+
+// ---------- 連結MP4の組み立て ----------
+function buildMoov(A, N, dataStart, use64) {
+  const u = A.u;
+  const shiftOf = k => dataStart - A.lo + k * A.span;
+  const fullHead = (ver, flags = 0) => { const w = new W(); w.u8(ver); w.u8(flags >> 16 & 255); w.u8(flags >> 8 & 255); w.u8(flags & 255); return w; };
+
+  function scaleDur(n, pos32, pos64) { // durationを×N（必要なら64bit化はせずエラー）
+    const b = body(u, n).slice(); const v = b[0];
+    const w = new W(); w.bytes(b); const arr = w.b;
+    if (v === 1) { const d = rd64(b, pos64) * N; const t = new W(); t.u64(d); arr.set(t.out(), pos64); }
+    else { const d = rd32(b, pos32) * N; if (d > 0xFFFFFFFF) throw new Error("長すぎて時間情報が32bitに収まりません。回数を減らしてください。"); const t = new W(); t.u32(d); arr.set(t.out(), pos32); }
+    return box(n.type, w.out());
+  }
+  function rebuildElst(n) {
+    const b = body(u, n), v = b[0], cnt = rd32(b, 4); const w = fullHead(v, 0); w.u32(cnt);
+    for (let i = 0; i < cnt; i++) {
+      if (v === 1) { const o = 8 + i * 20; const d = rd64(b, o), mt = b.subarray(o + 8, o + 16), r = b.subarray(o + 16, o + 20); const empty = rd32(b, o + 8) === 0xFFFFFFFF; w.u64(empty ? d : d * N); w.bytes(mt); w.bytes(r); }
+      else { const o = 8 + i * 12; const d = rd32(b, o), mt = rd32(b, o + 4); const nd = mt === 0xFFFFFFFF ? d : d * N; if (nd > 0xFFFFFFFF) throw new Error("長すぎます。回数を減らしてください。"); w.u32(nd); w.u32(mt); w.bytes(b.subarray(o + 8, o + 12)); }
+    }
+    return box("elst", w.out());
+  }
+  function repeatEntries(n, entrySize, headerExtra = 0) { // stts / ctts / sbgp 型: [count][entries]
+    const b = body(u, n); const pre = b.subarray(0, 4 + headerExtra); const cnt = rd32(b, 4 + headerExtra);
+    const ent = b.subarray(8 + headerExtra, 8 + headerExtra + cnt * entrySize);
+    const w = new W(ent.length * N + 16); w.bytes(pre); w.u32(cnt * N); for (let k = 0; k < N; k++) w.bytes(ent);
+    return box(n.type, w.out());
+  }
+  function rebuildStbl(t) {
+    const parts = [];
+    for (const c of t.stbl.children) {
+      const b = body(u, c);
+      switch (c.type) {
+        case "stts": case "ctts": parts.push(repeatEntries(c, 8)); break;
+        case "sbgp": parts.push(repeatEntries(c, 8, b[0] === 1 ? 8 : 4)); break;
+        case "stss": { const cnt = rd32(b, 4); const w = fullHead(b[0], 0); w.u32(cnt * N);
+          for (let k = 0; k < N; k++) for (let i = 0; i < cnt; i++) w.u32(rd32(b, 8 + i * 4) + k * t.nSamples);
+          parts.push(box("stss", w.out())); break; }
+        case "stsz": { const w = fullHead(0, 0); w.u32(t.constSize); w.u32(t.nSamples * N);
+          if (!t.constSize) { const arr = b.subarray(12, 12 + t.nSamples * 4); for (let k = 0; k < N; k++) w.bytes(arr); }
+          parts.push(box("stsz", w.out())); break; }
+        case "stsc": { const w = fullHead(0, 0); w.u32(t.stsc.length * N);
+          for (let k = 0; k < N; k++) for (const [fc, spc, sdi] of t.stsc) { w.u32(fc + k * t.nChunks); w.u32(spc); w.u32(sdi); }
+          parts.push(box("stsc", w.out())); break; }
+        case "stco": case "co64": { const w = fullHead(0, 0); w.u32(t.nChunks * N);
+          for (let k = 0; k < N; k++) { const sh = shiftOf(k); for (let i = 0; i < t.nChunks; i++) { const v = t.chunkOff[i] + sh; use64 ? w.u64(v) : w.u32(v); } }
+          parts.push(box(use64 ? "co64" : "stco", w.out())); break; }
+        case "sdtp": { const w = fullHead(b[0], 0); const arr = b.subarray(4, 4 + t.nSamples); for (let k = 0; k < N; k++) w.bytes(arr); parts.push(box("sdtp", w.out())); break; }
+        default: parts.push(u.subarray(c.start, c.start + c.size));
+      }
+    }
+    return box("stbl", concat(parts));
+  }
+  function rebuild(node, t) { // 再帰的に組み直す
+    if (node.type === "stbl") return rebuildStbl(t);
+    if (node.type === "mvhd") return scaleDur(node, 16, 24);
+    if (node.type === "tkhd") return scaleDur(node, 20, 28);
+    if (node.type === "mdhd") return scaleDur(node, 16, 24);
+    if (node.type === "elst") return rebuildElst(node);
+    if (node.children) return box(node.type, concat(node.children.map(c => rebuild(c, t))));
+    return u.subarray(node.start, node.start + node.size);
+  }
+  const kids = A.moov.children.map(c => {
+    if (c.type === "trak") { const t = A.tracks.find(x => x.trak === c); return t ? rebuild(c, t) : u.subarray(c.start, c.start + c.size); }
+    return rebuild(c, null);
+  });
+  return box("moov", concat(kids));
+}
+
+function buildOutput(A, N) {
+  const u = A.u;
+  const ftyp = A.ftyp ? u.subarray(A.ftyp.start, A.ftyp.start + A.ftyp.size) : new Uint8Array(0);
+  const dataLen = A.span * N;
+  const bigMdat = dataLen + 8 > 0xFFFFFFFF;
+  const mdatHdrLen = bigMdat ? 16 : 8;
+  const use64 = dataLen + 64 * 1024 * 1024 > 0xFFFFFFFF;
+  const moov0 = buildMoov(A, N, 0, use64);
+  const dataStart = ftyp.length + moov0.length + mdatHdrLen;
+  const moov = buildMoov(A, N, dataStart, use64);
+  if (moov.length !== moov0.length) throw new Error("内部エラー：moovサイズ不一致");
+  const h = new W(16);
+  if (bigMdat) { h.u32(1); "mdat".split("").forEach(ch => h.u8(ch.charCodeAt(0))); h.u64(dataLen + 16); }
+  else { h.u32(dataLen + 8); "mdat".split("").forEach(ch => h.u8(ch.charCodeAt(0))); }
+  const data = u.subarray(A.lo, A.hi);
+  const parts = [ftyp, moov, h.out()]; for (let k = 0; k < N; k++) parts.push(data);
+  return new Blob(parts, { type: "video/mp4" });
+}
+
+// ---------- 表示用 ----------
+const fmt = s => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`; };
+const fmtB = b => b >= 1e9 ? (b / 1e9).toFixed(2) + " GB" : b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : (b / 1e3).toFixed(0) + " KB";
+const $ = id => document.getElementById(id);
+const CODEC = { avc1: "H.264", avc3: "H.264", hvc1: "H.265", hev1: "H.265", mp4a: "AAC", "Opus": "Opus", ac_3: "AC-3", av01: "AV1", vp09: "VP9" };
+
+let A = null, fileName = "", masterSec = 120, lastBlob = null, lastUrl = null, targetMin = 60;
+let downloads = null;
+try { if (window.claude && window.claude.use) window.claude.use("downloads").then(d => { downloads = d; }).catch(() => {}); } catch (e) {}
+
+function updateEq() {
+  const N = Math.max(1, Math.min(2000, parseInt($("count").value, 10) || 1));
+  $("eqOne").textContent = fmt(masterSec); $("eqN").textContent = N;
+  $("eqTotal").textContent = fmt(masterSec * N); $("stripEnd").textContent = fmt(masterSec * N);
+  $("eqTag").hidden = !!A;
+  const shown = Math.min(N, 120); const strip = $("strip"); strip.replaceChildren();
+  for (let i = 0; i < shown; i++) strip.appendChild(document.createElement("i"));
+  if (A) { const est = A.u.length - A.span + A.span * N; $("eqSize").textContent = `出力サイズの目安：約 ${fmtB(est)}（マスター ${fmtB(A.u.length)} × ${N}）` + (N > 120 ? "　※帯は先頭120区間まで表示" : ""); }
+  [...document.querySelectorAll(".chip")].forEach(c => c.setAttribute("aria-pressed", String(Math.round(+c.dataset.min * 60 / masterSec) === N && Math.abs(+c.dataset.min * 60 - masterSec * N) < masterSec / 2)));
+}
+function setFromTarget(min) { targetMin = min; $("count").value = Math.max(1, Math.round(min * 60 / masterSec)); updateEq(); }
+
+function showFacts(A, f) {
+  const v = A.tracks.find(t => t.handler === "vide"), a = A.tracks.find(t => t.handler === "soun");
+  const rows = [
+    ["ファイル", f.name], ["長さ", fmt(masterSec) + `（${masterSec.toFixed(3)}秒）`], ["サイズ", fmtB(f.size)],
+    ["映像", v ? `${CODEC[v.codec] || v.codec}　${v.width}×${v.height}　${(v.nSamples / (v.dur / v.ts)).toFixed(2)}fps` : "なし"],
+    ["音声", a ? `${CODEC[a.codec] || a.codec}　${a.ts / 1000}kHz` : "なし"],
+  ];
+  const dl = $("facts"); dl.replaceChildren();
+  for (const [k, val] of rows) { const d = document.createElement("div"); const dt = document.createElement("dt"); dt.textContent = k; const dd = document.createElement("dd"); dd.textContent = val; d.append(dt, dd); dl.appendChild(d); }
+  dl.hidden = false;
+  const checks = [];
+  if (v) checks.push(v.firstSync ? ["ok", "✓", "先頭がキーフレームです", "つなぎ目で映像が乱れません。"] : ["bad", "×", "先頭がキーフレームではありません", "つなぎ目で映像が崩れる可能性があります。"]);
+  if (v && a) { const dv = v.dur / v.ts, da = a.dur / a.ts; const gap = Math.abs(dv - da);
+    checks.push(gap < 0.05 ? ["ok", "✓", `映像と音声の長さが一致しています（差 ${(gap * 1000).toFixed(0)}ms）`, "何回つないでも音ズレが溜まりません。"] : ["warn", "!", `映像と音声の長さが ${(gap * 1000).toFixed(0)}ms ずれています`, `${parseInt($("count").value, 10) || 30}回つなぐと最大で約${(gap * (parseInt($("count").value, 10) || 30)).toFixed(1)}秒ずれます。`]); }
+  if (a) checks.push(a.elstMediaTime > 0 ? ["warn", "!", "音声の先頭に「助走」データがあります", "AACで一般的な仕様ですが、継ぎ目ごとに約0.02秒、音が細くなることがあります。連結用に書き出したマスターなら問題ありません。"] : ["ok", "✓", "音声は連結用の形式です", "継ぎ目に無音やプチッという音が入りません。"]);
+  const ul = $("checks"); ul.replaceChildren();
+  for (const [cls, ic, t, note] of checks) { const li = document.createElement("li"); li.className = cls; const s = document.createElement("span"); s.className = "ic"; s.textContent = ic; const d = document.createElement("span"); d.textContent = t; const n = document.createElement("span"); n.className = "note"; n.textContent = note; d.appendChild(n); li.append(s, d); ul.appendChild(li); }
+  ul.hidden = false;
+}
+
+async function loadFile(f) {
+  const st = $("status"); st.className = "status"; st.textContent = "読み込み中…"; $("go").disabled = true;
+  try {
+    const buf = new Uint8Array(await f.arrayBuffer());
+    A = analyze(buf); fileName = f.name;
+    masterSec = A.movieDuration / A.movieTimescale;
+    const v = A.tracks.find(t => t.handler === "vide"); if (v) masterSec = v.dur / v.ts;
+    $("dropTitle").textContent = f.name; $("dropSub").textContent = "別のファイルにする場合はもう一度クリック";
+    showFacts(A, f);
+    setFromTarget(targetMin);
+    const base = f.name.replace(/\.[^.]+$/, "");
+    $("outname").value = `${base}_x${$("count").value}.mp4`;
+    st.textContent = "準備ができました。"; $("go").disabled = false;
+  } catch (e) { A = null; st.className = "status err"; st.textContent = e.message; $("facts").hidden = true; $("checks").hidden = true; updateEq(); }
+}
+
+async function save(blob, name) {
+  if (downloads) {
+    try { await downloads.save({ filename: name, data: blob }); return "保存しました。"; }
+    catch (e) { if (e && e.code === "declined") return "保存はキャンセルされました。「もう一度保存」から保存できます。"; if (e && e.code !== "unavailable") throw new Error("保存できませんでした：" + (e.message || e.code)); }
+  }
+  const a = document.createElement("a"); a.href = lastUrl; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  return "ダウンロードを開始しました。";
+}
+
+async function run() {
+  if (!A) return;
+  const N = Math.max(1, Math.min(2000, parseInt($("count").value, 10) || 1));
+  const st = $("status"); st.className = "status"; $("go").disabled = true; $("bar").style.width = "30%";
+  st.textContent = `${N}回ぶん組み立て中…`;
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    const t0 = performance.now();
+    const blob = buildOutput(A, N);
+    $("bar").style.width = "80%";
+    if (lastUrl) URL.revokeObjectURL(lastUrl);
+    lastBlob = blob; lastUrl = URL.createObjectURL(blob);
+    let name = $("outname").value.trim() || "loop.mp4"; if (!/\.mp4$/i.test(name)) name += ".mp4";
+    const msg = await save(blob, name);
+    $("bar").style.width = "100%";
+    st.className = "status done";
+    st.textContent = `完成：${fmt(masterSec * N)}・${fmtB(blob.size)}（${((performance.now() - t0) / 1000).toFixed(1)}秒）。${msg}`;
+    $("again").hidden = false;
+    const vid = $("vid"); vid.src = lastUrl; $("preview").hidden = false;
+  } catch (e) { st.className = "status err"; st.textContent = e.message; $("bar").style.width = "0"; }
+  finally { $("go").disabled = false; }
+}
+
+// ---------- イベント ----------
+$("file").addEventListener("change", e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+const drop = $("drop");
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+$("chips").addEventListener("click", e => { const c = e.target.closest(".chip"); if (!c) return; setFromTarget(+c.dataset.min); syncName(); });
+$("count").addEventListener("input", () => { updateEq(); syncName(); });
+function syncName() { if (!fileName) return; const base = fileName.replace(/\.[^.]+$/, ""); $("outname").value = `${base}_x${parseInt($("count").value, 10) || 1}.mp4`; }
+$("go").addEventListener("click", run);
+$("again").addEventListener("click", async () => { if (!lastBlob) return; try { $("status").textContent = await save(lastBlob, $("outname").value.trim() || "loop.mp4"); } catch (e) { $("status").className = "status err"; $("status").textContent = e.message; } });
+$("seekSeam").addEventListener("click", () => { const v = $("vid"); v.currentTime = Math.max(0, masterSec - 5); v.play().catch(() => {}); });
+$("seekEnd").addEventListener("click", () => { const v = $("vid"); v.currentTime = Math.max(0, masterSec * (parseInt($("count").value, 10) || 1) - 30); v.play().catch(() => {}); });
+updateEq();
+window.__loop = { analyze, buildOutput };
+})();
+</script>

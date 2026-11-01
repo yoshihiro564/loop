@@ -169,6 +169,7 @@ footer p { margin: 0; max-width: 66ch; }
     <div class="row">
       <button class="primary" id="go" disabled>連結してMP4を作る</button>
       <button class="ghost" id="again" hidden>もう一度保存</button>
+      <button class="ghost" id="share" hidden>共有して保存（ファイル／写真）</button>
     </div>
     <div class="bar" aria-hidden="true"><span id="bar"></span></div>
     <p class="status" id="status" role="status"></p>
@@ -370,7 +371,9 @@ function buildOutput(A, N) {
   if (bigMdat) { h.u32(1); "mdat".split("").forEach(ch => h.u8(ch.charCodeAt(0))); h.u64(dataLen + 16); }
   else { h.u32(dataLen + 8); "mdat".split("").forEach(ch => h.u8(ch.charCodeAt(0))); }
   const data = u.subarray(A.lo, A.hi);
-  const parts = [ftyp, moov, h.out()]; for (let k = 0; k < N; k++) parts.push(data);
+  // 中身は1回だけBlob化し、それを参照でN回並べる（N倍のメモリを使わない。iPhone対策）
+  const dataBlob = new Blob([data]);
+  const parts = [ftyp, moov, h.out()]; for (let k = 0; k < N; k++) parts.push(dataBlob);
   return new Blob(parts, { type: "video/mp4" });
 }
 
@@ -391,7 +394,7 @@ function updateEq() {
   $("eqTag").hidden = !!A;
   const shown = Math.min(N, 120); const strip = $("strip"); strip.replaceChildren();
   for (let i = 0; i < shown; i++) strip.appendChild(document.createElement("i"));
-  if (A) { const est = A.u.length - A.span + A.span * N; $("eqSize").textContent = `出力サイズの目安：約 ${fmtB(est)}（マスター ${fmtB(A.u.length)} × ${N}）` + (N > 120 ? "　※帯は先頭120区間まで表示" : ""); }
+  if (A) { const est = A.u.length - A.span + A.span * N; const perHour = (A.u.length / masterSec) * 3600; $("eqSize").textContent = `出力サイズの目安：約 ${fmtB(est)}（マスター ${fmtB(A.u.length)} × ${N}）　1時間あたり約 ${fmtB(perHour)}` + (est > 1e9 ? "　⚠ 1GBを超えます。マスターをもっと軽く書き出してください（2分あたり14MB以下が目安）" : "") + (N > 120 ? "　※帯は先頭120区間まで表示" : ""); $("eqSize").style.color = est > 1e9 ? "var(--warn)" : ""; }
   [...document.querySelectorAll(".chip")].forEach(c => c.setAttribute("aria-pressed", String(Math.round(+c.dataset.min * 60 / masterSec) === N && Math.abs(+c.dataset.min * 60 - masterSec * N) < masterSec / 2)));
 }
 function setFromTarget(min) { targetMin = min; $("count").value = Math.max(1, Math.round(min * 60 / masterSec)); updateEq(); }
@@ -437,8 +440,25 @@ async function save(blob, name) {
     try { await downloads.save({ filename: name, data: blob }); return "保存しました。"; }
     catch (e) { if (e && e.code === "declined") return "保存はキャンセルされました。「もう一度保存」から保存できます。"; if (e && e.code !== "unavailable") throw new Error("保存できませんでした：" + (e.message || e.code)); }
   }
-  const a = document.createElement("a"); a.href = lastUrl; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  if (IOS) return "iphone";            // iPhone/iPadはボタンを押した瞬間に保存する（自動ダウンロードは失敗しやすい）
+  anchorDl(name);
   return "ダウンロードを開始しました。";
+}
+const IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+function outName() { let n = $("outname").value.trim() || "loop.mp4"; if (!/\.mp4$/i.test(n)) n += ".mp4"; return n; }
+function anchorDl(name) { const a = document.createElement("a"); a.href = lastUrl; a.download = name; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); }
+async function shareSave() {
+  if (!lastBlob) return;
+  const st = $("status");
+  try {
+    const file = new File([lastBlob], outName(), { type: "video/mp4" });
+    if (!navigator.canShare || !navigator.canShare({ files: [file] })) { st.className = "status err"; st.textContent = "この端末のブラウザは共有での保存に対応していません。「ダウンロード」を使うか、パソコンで作成してください。"; return; }
+    await navigator.share({ files: [file] });
+    st.className = "status done"; st.textContent = "共有メニューに渡しました。「ファイルに保存」または「ビデオを保存」を選んでください。";
+  } catch (e) {
+    if (e && e.name === "AbortError") return;
+    st.className = "status err"; st.textContent = "共有できませんでした（" + (e.message || e.name) + "）。長さを短くする（例：1時間）か、パソコンで作成してください。";
+  }
 }
 
 async function run() {
@@ -453,13 +473,17 @@ async function run() {
     $("bar").style.width = "80%";
     if (lastUrl) URL.revokeObjectURL(lastUrl);
     lastBlob = blob; lastUrl = URL.createObjectURL(blob);
-    let name = $("outname").value.trim() || "loop.mp4"; if (!/\.mp4$/i.test(name)) name += ".mp4";
-    const msg = await save(blob, name);
+    const name = outName();
+    let msg = await save(blob, name);
     $("bar").style.width = "100%";
     st.className = "status done";
+    if (msg === "iphone") {
+      msg = "下の「ダウンロード」で保存してください。うまくいかない時は「共有して保存」から「ファイルに保存」を選んでください。";
+      $("again").textContent = "ダウンロード"; $("share").hidden = false;
+    }
     st.textContent = `完成：${fmt(masterSec * N)}・${fmtB(blob.size)}（${((performance.now() - t0) / 1000).toFixed(1)}秒）。${msg}`;
     $("again").hidden = false;
-    const vid = $("vid"); vid.src = lastUrl; $("preview").hidden = false;
+    const vid = $("vid"); vid.removeAttribute("src"); vid.load(); $("preview").hidden = false;   // 再生は確認ボタンを押した時だけ読み込む
   } catch (e) { st.className = "status err"; st.textContent = e.message; $("bar").style.width = "0"; }
   finally { $("go").disabled = false; }
 }
@@ -474,9 +498,19 @@ $("chips").addEventListener("click", e => { const c = e.target.closest(".chip");
 $("count").addEventListener("input", () => { updateEq(); syncName(); });
 function syncName() { if (!fileName) return; const base = fileName.replace(/\.[^.]+$/, ""); $("outname").value = `${base}_x${parseInt($("count").value, 10) || 1}.mp4`; }
 $("go").addEventListener("click", run);
-$("again").addEventListener("click", async () => { if (!lastBlob) return; try { $("status").textContent = await save(lastBlob, $("outname").value.trim() || "loop.mp4"); } catch (e) { $("status").className = "status err"; $("status").textContent = e.message; } });
-$("seekSeam").addEventListener("click", () => { const v = $("vid"); v.currentTime = Math.max(0, masterSec - 5); v.play().catch(() => {}); });
-$("seekEnd").addEventListener("click", () => { const v = $("vid"); v.currentTime = Math.max(0, masterSec * (parseInt($("count").value, 10) || 1) - 30); v.play().catch(() => {}); });
+$("again").addEventListener("click", async () => {
+  if (!lastBlob) return;
+  if (IOS && !downloads) { anchorDl(outName()); return; }
+  try { $("status").textContent = await save(lastBlob, outName()); } catch (e) { $("status").className = "status err"; $("status").textContent = e.message; }
+});
+$("share").addEventListener("click", shareSave);
+function seekTo(t) {
+  const v = $("vid"); if (!lastUrl) return;
+  const go = () => { v.currentTime = t; v.play().catch(() => {}); };
+  if (v.getAttribute("src") !== lastUrl) { v.src = lastUrl; v.addEventListener("loadedmetadata", go, { once: true }); } else go();
+}
+$("seekSeam").addEventListener("click", () => seekTo(Math.max(0, masterSec - 5)));
+$("seekEnd").addEventListener("click", () => seekTo(Math.max(0, masterSec * (parseInt($("count").value, 10) || 1) - 30)));
 updateEq();
 window.__loop = { analyze, buildOutput };
 })();

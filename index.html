@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>ループ連結機</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -105,6 +106,9 @@ input[type=text] { width: min(100%, 340px); }
 .strip i:nth-child(even) { background: var(--seg-b); }
 .strip-legend { display: flex; justify-content: space-between; font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
 .sub { color: var(--muted); font-size: 13px; margin: 0; }
+.fade-box { display: grid; gap: 10px; }
+.fade-head { font-size: 14px; font-weight: 600; }
+.fade-head .hint { display: block; font-weight: 400; color: var(--muted); font-size: 13px; }
 
 /* 書き出し */
 .primary {
@@ -127,7 +131,7 @@ footer p { margin: 0; max-width: 66ch; }
 <div class="wrap">
   <header>
     <h1><span class="moon" aria-hidden="true"></span>ループ連結機</h1>
-    <p class="lead">2分のループ動画を指定回数ぶんつなげて、1時間の動画にします。再エンコードしないので画質・音質はそのまま、数秒で完了します。処理はすべてこのブラウザの中で行い、ファイルはどこにも送信しません。</p>
+    <p class="lead">2分のループ動画を指定回数ぶんつなげて、1時間の動画にします。再エンコードしないので画質・音質はそのまま、数秒で完了します（頭とお尻のフェードを付けるときは、その数秒だけ作り直します）。処理はすべてこのブラウザの中で行い、ファイルはどこにも送信しません。</p>
   </header>
 
   <section aria-labelledby="s1">
@@ -153,6 +157,18 @@ footer p { margin: 0; max-width: 66ch; }
     <div class="row">
       <label class="field" for="count">くり返し回数 <input type="number" id="count" min="1" max="2000" step="1" value="30"> 回</label>
     </div>
+    <div class="fade-box">
+      <div class="fade-head">頭とお尻のフェード <span class="hint">最初はフェードイン、最後はフェードアウト（映像は黒から／黒へ、音は無音から／無音へ）</span></div>
+      <div class="chips" id="fadeChips" role="group" aria-label="フェード">
+        <button class="chip" data-fade="0" aria-pressed="true">なし（今まで通り）</button>
+        <button class="chip" data-fade="1">1秒</button>
+        <button class="chip" data-fade="2">2秒</button>
+        <button class="chip" data-fade="3">3秒</button>
+        <button class="chip" data-fade="5">5秒</button>
+        <button class="chip" data-fade="10">10秒</button>
+      </div>
+      <p class="sub" id="fadeNote">再エンコードなしで連結します。数秒で完了します。</p>
+    </div>
     <div class="equation" aria-live="polite">
       <div class="eq"><span id="eqOne">2:00</span><span class="op">×</span><span id="eqN">30</span><span class="op">=</span><span class="total" id="eqTotal">1:00:00</span><span class="tag" id="eqTag">例</span></div>
       <div class="strip" id="strip" aria-hidden="true"></div>
@@ -176,6 +192,7 @@ footer p { margin: 0; max-width: 66ch; }
     <div class="preview" id="preview" hidden>
       <video id="vid" controls playsinline preload="metadata"></video>
       <div class="row">
+        <button class="ghost" id="seekStart">最初から</button>
         <button class="ghost" id="seekSeam">1つ目の継ぎ目の5秒前へ</button>
         <button class="ghost" id="seekEnd">最後の30秒へ</button>
       </div>
@@ -184,6 +201,7 @@ footer p { margin: 0; max-width: 66ch; }
 
   <footer>
     <p>仕組み：MP4の中の映像・音声データをそのまま並べ直し、時間情報だけを書き換えています。映像も音声も再圧縮しません。</p>
+    <p>フェードを付けた場合：最初と最後の数秒（映像はキーフレーム単位）だけをブラウザ内で作り直し、残りは再圧縮せずにそのままつなぎます。対応は H.264＋AAC の動画です。音声の作り直しに対応していないブラウザでは、映像だけフェードします。</p>
     <p>対応形式：通常のMP4（H.264/H.265＋AAC など）。分割形式（fragmented MP4）には対応していません。</p>
   </footer>
 </div>
@@ -263,16 +281,31 @@ function analyze(u) {
     // stsc
     const sc = body(u, g("stsc")), nsc = rd32(sc, 4), stsc = [];
     for (let i = 0; i < nsc; i++) stsc.push([rd32(sc, 8 + i * 12), rd32(sc, 12 + i * 12), rd32(sc, 16 + i * 12)]);
-    // データ範囲
+    // データ範囲（＋サンプルごとの位置・チャンク情報）
     let lo = Infinity, hi = 0, s = 0;
+    const sampleOff = new Float64Array(nSamples), sampleChunk = new Uint32Array(nSamples), chunkSpc = new Uint32Array(nChunks), chunkDesc = new Uint32Array(nChunks);
     for (let c = 0, e = 0; c < nChunks; c++) {
       while (e + 1 < stsc.length && stsc[e + 1][0] <= c + 1) e++;
+      chunkSpc[c] = stsc[e][1]; chunkDesc[c] = stsc[e][2];
       let off = chunkOff[c];
-      for (let k = 0; k < stsc[e][1] && s < nSamples; k++, s++) { lo = Math.min(lo, off); off += sizes[s]; hi = Math.max(hi, off); }
+      for (let k = 0; k < stsc[e][1] && s < nSamples; k++, s++) { sampleOff[s] = off; sampleChunk[s] = c; lo = Math.min(lo, off); off += sizes[s]; hi = Math.max(hi, off); }
     }
+    // 時刻（dts / cts オフセット）
+    const dts = new Float64Array(nSamples + 1);
+    { const tb = body(u, g("stts")), n = rd32(tb, 4); let i = 0, tacc = 0;
+      for (let e = 0; e < n; e++) { const cnt = rd32(tb, 8 + e * 8), d = rd32(tb, 12 + e * 8); for (let j = 0; j < cnt && i < nSamples; j++) { dts[i++] = tacc; tacc += d; } }
+      while (i <= nSamples) dts[i++] = tacc; }
+    let cto = null, cttsV = 0;
+    if (g("ctts")) { const cb2 = body(u, g("ctts")), n = rd32(cb2, 4); cttsV = cb2[0]; cto = new Float64Array(nSamples); let i = 0;
+      for (let e = 0; e < n; e++) { const cnt = rd32(cb2, 8 + e * 8); let o = rd32(cb2, 12 + e * 8); if (cttsV === 1 && o > 0x7FFFFFFF) o -= 4294967296; for (let j = 0; j < cnt && i < nSamples; j++) cto[i++] = o; } }
     // sync
     const ss = g("stss"); let firstSync = true;
-    if (ss) { const sb = body(u, ss); firstSync = rd32(sb, 4) > 0 && rd32(sb, 8) === 1; }
+    const sync = new Uint8Array(nSamples);
+    if (ss) { const sb = body(u, ss); firstSync = rd32(sb, 4) > 0 && rd32(sb, 8) === 1; const n = rd32(sb, 4); for (let i = 0; i < n; i++) { const x = rd32(sb, 8 + i * 4) - 1; if (x >= 0 && x < nSamples) sync[x] = 1; } }
+    else sync.fill(1);
+    // サンプル記述（stsd エントリ）
+    const stsdEntries = [];
+    { const sdn = g("stsd"); if (sdn) { const b0 = sdn.start + sdn.hdr; const n = rd32(u, b0 + 4); let o = b0 + 8; for (let i = 0; i < n && o + 8 <= sdn.start + sdn.size; i++) { const sz = rd32(u, o); stsdEntries.push({ start: o, size: sz, type: rdType(u, o + 4) }); o += sz; } } }
     // 編集リスト
     const elst = path(trak, "edts", "elst"); let elstMediaTime = 0;
     if (elst) { const eb = body(u, elst), ev = eb[0], n = rd32(eb, 4);
@@ -281,7 +314,8 @@ function analyze(u) {
     const sd = g("stsd"); const codec = sd ? rdType(body(u, sd), 12) : "?";
     let width = 0, height = 0;
     const tk = find(trak.children, "tkhd"); if (tk) { const tb = body(u, tk); const L = tb.length; width = rd32(tb, L - 8) / 65536; height = rd32(tb, L - 4) / 65536; }
-    tracks.push({ trak, stbl, handler, ts, dur, nSamples, sizes, constSize, nChunks, chunkOff, stsc, lo, hi, firstSync, elstMediaTime, codec, width, height });
+    tracks.push({ trak, stbl, handler, ts, dur, nSamples, sizes, constSize, nChunks, chunkOff, stsc, lo, hi, firstSync, elstMediaTime, codec, width, height,
+      sampleOff, sampleChunk, chunkSpc, chunkDesc, dts, cto, cttsV, sync, hasStss: !!ss, stsdEntries });
   }
   if (!tracks.length) throw new Error("映像・音声トラックが見つかりません");
   const lo = Math.min(...tracks.map(t => t.lo)), hi = Math.max(...tracks.map(t => t.hi));
@@ -289,8 +323,10 @@ function analyze(u) {
 }
 
 // ---------- 連結MP4の組み立て ----------
-function buildMoov(A, N, dataStart, use64) {
+function buildMoov(A, N, dataStart, use64, mods = null, appLen = 0) {
   const u = A.u;
+  // mdat の中身は [元データ × N][差し替え用データ appLen]
+  const appBase = dataStart + A.span * N;
   const shiftOf = k => dataStart - A.lo + k * A.span;
   const fullHead = (ver, flags = 0) => { const w = new W(); w.u8(ver); w.u8(flags >> 16 & 255); w.u8(flags >> 8 & 255); w.u8(flags & 255); return w; };
 
@@ -340,8 +376,73 @@ function buildMoov(A, N, dataStart, use64) {
     }
     return box("stbl", concat(parts));
   }
+  // フェード用：一部サンプルを差し替えた stbl
+  function rebuildStblMod(t, m) {
+    const n = t.nSamples;
+    const chOff = [], chCnt = [], chDesc = [];
+    const szW = new W(n * N * 4 + 16), syncW = new W(1024);
+    const ctE = []; // [count, offset] RLE
+    const pushCt = o => { const L = ctE.length; if (L && ctE[L - 1][1] === o) ctE[L - 1][0]++; else ctE.push([1, o]); };
+    let anyNonSync = false, syncCount = 0;
+    const origSz = t.sizes;
+    for (let k = 0; k < N; k++) {
+      const ov = m.ov[k], base = k * n;
+      if (!ov) {
+        const sh = shiftOf(k);
+        for (let c = 0; c < t.nChunks; c++) { chOff.push(t.chunkOff[c] + sh); chCnt.push(t.chunkSpc[c]); chDesc.push(t.chunkDesc[c]); }
+        for (let i = 0; i < n; i++) { szW.u32(origSz[i]); if (t.sync[i]) { syncW.u32(base + i + 1); syncCount++; } else anyNonSync = true; if (t.cto) pushCt(t.cto[i]); }
+        continue;
+      }
+      const sh = shiftOf(k);
+      let pOff = -1, pSize = 0, pDesc = 0;
+      for (let i = 0; i < n; i++) {
+        const o = ov.get(i);
+        const off = o ? appBase + o.rel : t.sampleOff[i] + sh, size = o ? o.size : origSz[i];
+        let desc = o ? o.desc : 0;
+        if (!o) { // 元のチャンクの記述番号
+          desc = t.chunkDesc[t.sampleChunk[i]];
+        }
+        if (chOff.length && pOff + pSize === off && pDesc === desc) chCnt[chCnt.length - 1]++;
+        else { chOff.push(off); chCnt.push(1); chDesc.push(desc); }
+        pOff = off; pSize = size; pDesc = desc;
+        szW.u32(size);
+        const sy = o ? o.sync : t.sync[i];
+        if (sy) { syncW.u32(base + i + 1); syncCount++; } else anyNonSync = true;
+        if (t.cto) pushCt(o ? o.cto : t.cto[i]);
+      }
+    }
+    const fh = (ver) => { const w = new W(); w.u8(ver); w.u8(0); w.u8(0); w.u8(0); return w; };
+    const parts = [];
+    let wroteStss = false;
+    for (const c of t.stbl.children) {
+      const b = body(u, c);
+      switch (c.type) {
+        case "stts": parts.push(repeatEntries(c, 8)); break;
+        case "sbgp": parts.push(repeatEntries(c, 8, b[0] === 1 ? 8 : 4)); break;
+        case "ctts": { const ver = t.cttsV; const w = fh(ver); w.u32(ctE.length);
+          for (const [cnt, o] of ctE) { w.u32(cnt); w.u32(o < 0 ? (ver === 1 ? o + 4294967296 : 0) : o); }
+          parts.push(box("ctts", w.out())); break; }
+        case "stss": { const w = fh(0); w.u32(syncCount); w.bytes(syncW.out()); parts.push(box("stss", w.out())); wroteStss = true; break; }
+        case "stsz": { const w = fh(0); w.u32(0); w.u32(n * N); w.bytes(szW.out()); parts.push(box("stsz", w.out())); break; }
+        case "stsc": { const w = fh(0); const ents = [];
+          for (let i = 0; i < chCnt.length; i++) { const L = ents.length; if (!L || ents[L - 1][1] !== chCnt[i] || ents[L - 1][2] !== chDesc[i]) ents.push([i + 1, chCnt[i], chDesc[i]]); }
+          w.u32(ents.length); for (const [a, b2, d] of ents) { w.u32(a); w.u32(b2); w.u32(d); }
+          parts.push(box("stsc", w.out())); break; }
+        case "stco": case "co64": { const w = fh(0); w.u32(chOff.length); for (const v of chOff) use64 ? w.u64(v) : w.u32(v); parts.push(box(use64 ? "co64" : "stco", w.out())); break; }
+        case "stsd": { if (!m.extra && !m.entry0) { parts.push(u.subarray(c.start, c.start + c.size)); break; }
+          const e0 = t.stsdEntries[0], rest = u.subarray(e0.start + e0.size, c.start + c.size);
+          const w = fh(b[0]); w.u32(rd32(b, 4) + (m.extra ? 1 : 0));
+          w.bytes(m.entry0 || u.subarray(e0.start, e0.start + e0.size)); w.bytes(rest); if (m.extra) w.bytes(m.extra);
+          parts.push(box("stsd", w.out())); break; }
+        case "sdtp": case "subs": break; // 差し替えで不整合になる任意ボックスは省く
+        default: parts.push(u.subarray(c.start, c.start + c.size));
+      }
+    }
+    if (!wroteStss && anyNonSync) { const w = fh(0); w.u32(syncCount); w.bytes(syncW.out()); parts.push(box("stss", w.out())); }
+    return box("stbl", concat(parts));
+  }
   function rebuild(node, t) { // 再帰的に組み直す
-    if (node.type === "stbl") return rebuildStbl(t);
+    if (node.type === "stbl") return mods && mods.get(t) ? rebuildStblMod(t, mods.get(t)) : rebuildStbl(t);
     if (node.type === "mvhd") return scaleDur(node, 16, 24);
     if (node.type === "tkhd") return scaleDur(node, 20, 28);
     if (node.type === "mdhd") return scaleDur(node, 16, 24);
@@ -356,16 +457,16 @@ function buildMoov(A, N, dataStart, use64) {
   return box("moov", concat(kids));
 }
 
-function buildOutput(A, N) {
+function buildOutput(A, N, mods = null, app = [], appLen = 0) {
   const u = A.u;
   const ftyp = A.ftyp ? u.subarray(A.ftyp.start, A.ftyp.start + A.ftyp.size) : new Uint8Array(0);
-  const dataLen = A.span * N;
+  const dataLen = A.span * N + appLen;
   const bigMdat = dataLen + 8 > 0xFFFFFFFF;
   const mdatHdrLen = bigMdat ? 16 : 8;
   const use64 = dataLen + 64 * 1024 * 1024 > 0xFFFFFFFF;
-  const moov0 = buildMoov(A, N, 0, use64);
+  const moov0 = buildMoov(A, N, 0, use64, mods, appLen);
   const dataStart = ftyp.length + moov0.length + mdatHdrLen;
-  const moov = buildMoov(A, N, dataStart, use64);
+  const moov = buildMoov(A, N, dataStart, use64, mods, appLen);
   if (moov.length !== moov0.length) throw new Error("内部エラー：moovサイズ不一致");
   const h = new W(16);
   if (bigMdat) { h.u32(1); "mdat".split("").forEach(ch => h.u8(ch.charCodeAt(0))); h.u64(dataLen + 16); }
@@ -373,8 +474,394 @@ function buildOutput(A, N) {
   const data = u.subarray(A.lo, A.hi);
   // 中身は1回だけBlob化し、それを参照でN回並べる（N倍のメモリを使わない。iPhone対策）
   const dataBlob = new Blob([data]);
-  const parts = [ftyp, moov, h.out()]; for (let k = 0; k < N; k++) parts.push(dataBlob);
+  const parts = [ftyp, moov, h.out()]; for (let k = 0; k < N; k++) parts.push(dataBlob); parts.push(...app);
   return new Blob(parts, { type: "video/mp4" });
+}
+
+// ---------- フェード（最初と最後の数秒だけ WebCodecs で作り直す） ----------
+const tick = () => new Promise(r => setTimeout(r, 0));
+const toU8 = d => d instanceof Uint8Array ? d : ArrayBuffer.isView(d) ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength) : new Uint8Array(d);
+const hex2 = x => x.toString(16).padStart(2, "0");
+const clamp01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
+class Unsupported extends Error {}
+
+function entryChildren(u, e, skip) { return parse(u, e.start + 8 + skip, e.start + e.size); }
+// ---- H.264 パラメータセットの ID 振り直し（元の SPS/PPS と衝突させないため） ----
+function unescapeRbsp(b) { const o = new Uint8Array(b.length); let n = 0, z = 0;
+  for (let i = 0; i < b.length; i++) { const v = b[i]; if (z >= 2 && v === 3) { z = 0; continue; } o[n++] = v; z = v === 0 ? z + 1 : 0; } return o.subarray(0, n); }
+function escapeRbsp(b) { const w = new W(b.length + 16); let z = 0;
+  for (let i = 0; i < b.length; i++) { const v = b[i]; if (z >= 2 && v <= 3) { w.u8(3); z = 0; } w.u8(v); z = v === 0 ? z + 1 : 0; } return w.out(); }
+class BR { constructor(b, pos = 0) { this.b = b; this.p = pos; }
+  bit() { const v = (this.b[this.p >> 3] >> (7 - (this.p & 7))) & 1; this.p++; return v; }
+  u(n) { let v = 0; for (let i = 0; i < n; i++) v = v * 2 + this.bit(); return v; }
+  ue() { let z = 0; while (this.bit() === 0) { if (++z > 31) throw new Error("bad ue"); } return z ? (2 ** z - 1 + this.u(z)) : 0; }
+  se() { const k = this.ue(); return k & 1 ? (k + 1) / 2 : -k / 2; } }
+class BWr { constructor() { this.a = []; this.cur = 0; this.n = 0; }
+  bit(v) { this.cur = (this.cur << 1) | (v & 1); if (++this.n === 8) { this.a.push(this.cur); this.cur = 0; this.n = 0; } }
+  u(len, v) { for (let i = len - 1; i >= 0; i--) this.bit(Math.floor(v / 2 ** i) & 1); }
+  ue(v) { const x = v + 1, L = Math.floor(Math.log2(x)); this.u(L, 0); this.u(L + 1, x); }
+  aligned() { return this.n === 0; }
+  bytes() { return Uint8Array.from(this.a); } }
+const lastOne = r => { for (let i = r.length - 1; i >= 0; i--) if (r[i]) { let k = 0; while (!((r[i] >> k) & 1)) k++; return i * 8 + (7 - k); } return -1; };
+function copyBitsTo(w, rd, endBit) { while (rd.p < endBit) w.bit(rd.bit()); }
+function finishRbsp(w) { w.bit(1); while (!w.aligned()) w.bit(0); }
+function parseSPS(nal) { const r = new BR(unescapeRbsp(nal), 8); const s = {};
+  s.profile = r.u(8); r.u(16); s.id = r.ue(); s.chroma = 1; s.sepPlane = 0;
+  if ([100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].includes(s.profile)) {
+    s.chroma = r.ue(); if (s.chroma === 3) s.sepPlane = r.bit(); r.ue(); r.ue(); r.bit();
+    if (r.bit()) for (let i = 0; i < (s.chroma !== 3 ? 8 : 12); i++) if (r.bit()) { let last = 8, next = 8; for (let j = 0; j < (i < 6 ? 16 : 64); j++) { if (next !== 0) next = (last + r.se() + 256) % 256; last = next === 0 ? last : next; } }
+  }
+  s.log2Frame = r.ue() + 4; s.poc = r.ue();
+  if (s.poc === 0) s.log2Poc = r.ue() + 4; else if (s.poc === 1) { s.dzero = r.bit(); r.se(); r.se(); const k = r.ue(); for (let i = 0; i < k; i++) r.se(); }
+  r.ue(); r.bit(); r.ue(); r.ue(); s.frameMbsOnly = r.bit();
+  return s; }
+function parsePPS(nal) { const r = new BR(unescapeRbsp(nal), 8); const p = {};
+  p.id = r.ue(); p.sps = r.ue(); p.cabac = r.bit(); p.bfpo = r.bit(); p.groups = r.ue() + 1;
+  if (p.groups > 1) throw new Error("FMO");
+  p.l0 = r.ue(); p.l1 = r.ue(); p.wp = r.bit(); p.wb = r.u(2); r.se(); r.se(); r.se(); p.dbk = r.bit(); r.bit(); p.redund = r.bit();
+  return p; }
+function rewriteSPS(nal, newId) { const rb = unescapeRbsp(nal), r = new BR(rb, 8), w = new BWr(); w.u(8, rb[0]);
+  w.u(24, r.u(24)); r.ue(); w.ue(newId); copyBitsTo(w, r, lastOne(rb)); finishRbsp(w); return escapeRbsp(w.bytes()); }
+function rewritePPS(nal, newId, newSps) { const rb = unescapeRbsp(nal), r = new BR(rb, 8), w = new BWr(); w.u(8, rb[0]);
+  r.ue(); r.ue(); w.ue(newId); w.ue(newSps); copyBitsTo(w, r, lastOne(rb)); finishRbsp(w); return escapeRbsp(w.bytes()); }
+function rewriteSlice(nal, newPpsId, sps, pps) {
+  const rb = unescapeRbsp(nal), r = new BR(rb, 8), w = new BWr(); w.u(8, rb[0]);
+  const nut = rb[0] & 31, refIdc = (rb[0] >> 5) & 3;
+  const firstMb = r.ue(), sliceType = r.ue(); r.ue();
+  w.ue(firstMb); w.ue(sliceType); w.ue(newPpsId);
+  const startRest = r.p;
+  if (!pps.cabac) { copyBitsTo(w, r, lastOne(rb)); finishRbsp(w); return escapeRbsp(w.bytes()); }
+  // CABAC：ヘッダの終わりまで読み、整列ビットを付け直してからデータ部をバイト単位でつなぐ
+  const st = sliceType % 5, P = st === 0, B = st === 1, I = st === 2, SP = st === 3, SI = st === 4;
+  if (sps.sepPlane) r.u(2);
+  r.u(sps.log2Frame); let field = 0;
+  if (!sps.frameMbsOnly) { field = r.bit(); if (field) r.bit(); }
+  if (nut === 5) r.ue();
+  if (sps.poc === 0) { r.u(sps.log2Poc); if (pps.bfpo && !field) r.se(); }
+  else if (sps.poc === 1 && !sps.dzero) { r.se(); if (pps.bfpo && !field) r.se(); }
+  if (pps.redund) r.ue();
+  if (B) r.bit();
+  let l0 = pps.l0, l1 = pps.l1;
+  if (P || SP || B) { if (r.bit()) { l0 = r.ue(); if (B) l1 = r.ue(); } }
+  const rplm = () => { if (r.bit()) { let idc; do { idc = r.ue(); if (idc === 0 || idc === 1 || idc === 2) r.ue(); } while (idc !== 3); } };
+  if (!I && !SI) { rplm(); if (B) rplm(); }
+  if ((pps.wp && (P || SP)) || (pps.wb === 1 && B)) {
+    const chromaArr = sps.sepPlane ? 0 : sps.chroma;
+    r.ue(); if (chromaArr !== 0) r.ue();
+    const tbl = n2 => { for (let i = 0; i <= n2; i++) { if (r.bit()) { r.se(); r.se(); } if (chromaArr !== 0 && r.bit()) { r.se(); r.se(); r.se(); r.se(); } } };
+    tbl(l0); if (B) tbl(l1);
+  }
+  if (refIdc) { if (nut === 5) { r.bit(); r.bit(); } else if (r.bit()) { let m; do { m = r.ue(); if (m === 1 || m === 3) r.ue(); if (m === 2) r.ue(); if (m === 3 || m === 6) r.ue(); if (m === 4) r.ue(); } while (m !== 0); } }
+  if (!I && !SI) r.ue();
+  r.se();
+  if (SP || SI) { if (SP) r.bit(); r.se(); }
+  if (pps.dbk) { if (r.ue() !== 1) { r.se(); r.se(); } }
+  const hdrEnd = r.p;
+  r.p = startRest; copyBitsTo(w, r, hdrEnd);
+  while (!w.aligned()) w.bit(1);           // cabac_alignment_one_bit
+  const dataByte = (hdrEnd + 7) >> 3;
+  const head = w.bytes();
+  return escapeRbsp(concat([head, rb.subarray(dataByte)]));
+}
+function splitNals(b, lenSize) { const out = []; let o = 0;
+  while (o + lenSize <= b.length) { let L = 0; for (let i = 0; i < lenSize; i++) L = L * 256 + b[o + i]; o += lenSize; if (L <= 0 || o + L > b.length) throw new Error("NAL長が不正です"); out.push(b.subarray(o, o + L)); o += L; }
+  return out; }
+function joinNals(nals, lenSize) { const w = new W(); for (const n of nals) { const L = n.length; for (let i = lenSize - 1; i >= 0; i--) w.u8((L >>> (8 * i)) & 255); w.bytes(n); } return w.out(); }
+// 元 avcC と新 avcC から「両方の SPS/PPS を持つ avcC」と、新サンプルの書き換え関数を作る
+function makeParamMerger(origAvcC, newAvcC) {
+  const parseAvc = c => { const lenSize = (c[4] & 3) + 1, sps = [], pps = []; let o = 6;
+    const nS = c[5] & 31; for (let i = 0; i < nS; i++) { const L = (c[o] << 8) | c[o + 1]; sps.push(c.slice(o + 2, o + 2 + L)); o += 2 + L; }
+    const nP = c[o++]; for (let i = 0; i < nP; i++) { const L = (c[o] << 8) | c[o + 1]; pps.push(c.slice(o + 2, o + 2 + L)); o += 2 + L; }
+    return { lenSize, sps, pps, tail: c.slice(o) }; };
+  const O = parseAvc(origAvcC), Nw = parseAvc(newAvcC);
+  if (!Nw.sps.length || !Nw.pps.length) throw new Error("新しい映像の設定情報が読めません。");
+  const oS = O.sps.map(parseSPS), oP = O.pps.map(parsePPS);
+  const spsId = Math.max(-1, ...oS.map(s => s.id)) + 1, ppsBase = Math.max(-1, ...oP.map(p => p.id)) + 1;
+  if (spsId > 31 || ppsBase + Nw.pps.length > 255) throw new Error("パラメータセットの番号が足りません。");
+  if (Nw.sps.length > 1) throw new Error("新しい映像の設定情報が想定外です。");
+  const nSps = parseSPS(Nw.sps[0]);
+  const ppsMap = new Map(); // 旧 pps_id → { newId, pps }
+  const newPpsNals = Nw.pps.map((n, i) => { const p = parsePPS(n); ppsMap.set(p.id, { newId: ppsBase + i, pps: p }); return rewritePPS(n, ppsBase + i, spsId); });
+  const newSpsNal = rewriteSPS(Nw.sps[0], spsId);
+  const w = new W(); w.bytes(origAvcC.subarray(0, 5));
+  const allS = [...O.sps, newSpsNal], allP = [...O.pps, ...newPpsNals];
+  w.u8(0xE0 | allS.length); for (const s of allS) { w.u8(s.length >> 8); w.u8(s.length & 255); w.bytes(s); }
+  w.u8(allP.length); for (const p of allP) { w.u8(p.length >> 8); w.u8(p.length & 255); w.bytes(p); }
+  w.bytes(O.tail);
+  const merged = w.out();
+  const rewriteSample = b => {
+    const out = [];
+    for (const nal of splitNals(b, Nw.lenSize)) {
+      const t = nal[0] & 31;
+      if (t === 7 || t === 8 || t === 9) continue; // パラメータセット・AUD は入れない
+      if (t === 1 || t === 5) { const id = new BR(unescapeRbsp(nal.subarray(0, Math.min(nal.length, 24))), 8); id.ue(); id.ue(); const pid = id.ue();
+        const m = ppsMap.get(pid); if (!m) throw new Error("PPSが見つかりません");
+        out.push(rewriteSlice(nal, m.newId, nSps, m.pps)); }
+      else out.push(nal);
+    }
+    return joinNals(out, O.lenSize);
+  };
+  return { merged, rewriteSample };
+}
+
+function readDescLen(u, o) { let len = 0, k = 0, b; do { b = u[o + k]; len = (len << 7) | (b & 127); k++; } while ((b & 128) && k < 4); return [len, k]; }
+function findASC(u, esdsNode) { // esds → { objType, ascStart, ascLen }
+  let o = esdsNode.start + esdsNode.hdr + 4; const end = esdsNode.start + esdsNode.size;
+  if (u[o] !== 3) return null; let [, k] = readDescLen(u, o + 1); o += 1 + k;
+  const fl = u[o + 2]; o += 3; if (fl & 128) o += 2; if (fl & 64) o += 1 + u[o]; if (fl & 32) o += 2;
+  if (u[o] !== 4) return null; [, k] = readDescLen(u, o + 1); o += 1 + k;
+  const objType = u[o]; o += 13;
+  if (o >= end || u[o] !== 5) return { objType, ascStart: -1, ascLen: 0 };
+  const [L, k2] = readDescLen(u, o + 1); return { objType, ascStart: o + 1 + k2, ascLen: L };
+}
+function audioEntryInfo(u, e) {
+  const ver = (u[e.start + 16] << 8) | u[e.start + 17];
+  const ch = (u[e.start + 24] << 8) | u[e.start + 25];
+  const skip = 28 + (ver === 1 ? 16 : ver === 2 ? 36 : 0);
+  const esds = find(entryChildren(u, e, skip), "esds");
+  return { ch, esds, info: esds ? findASC(u, esds) : null };
+}
+
+async function fadeVideo(A, t, N, F, Tend, push, prog) {
+  const u = A.u;
+  if (!/^avc[13]$/.test(t.codec)) throw new Error("フェードは H.264 の動画のみ対応しています（この動画は " + (CODEC[t.codec] || t.codec) + "）。");
+  if (typeof VideoEncoder === "undefined" || typeof VideoDecoder === "undefined") throw new Error("このブラウザは動画の部分作り直し（WebCodecs）に対応していません。最新の Chrome / Edge / Safari で開いてください。");
+  const e0 = t.stsdEntries[0]; const avcN = find(entryChildren(u, e0, 78), "avcC");
+  if (!avcN) throw new Error("映像の設定情報（avcC）が見つかりません。");
+  const avcC = body(u, avcN).slice();
+  const codec = "avc1." + hex2(avcC[1]) + hex2(avcC[2]) + hex2(avcC[3]);
+  const n = t.nSamples, E = t.elstMediaTime;
+  const cts = i => t.dts[i] + (t.cto ? t.cto[i] : 0);
+  const pt = i => (cts(i) - E) / t.ts;
+  const fd = (t.dts[n] - t.dts[0]) / n / t.ts;
+  // 切れ目にできる位置（キーフレームかつ前後で表示順が混ざらない）
+  const pre = new Float64Array(n), suf = new Float64Array(n + 1); suf[n] = Infinity;
+  for (let i = 0; i < n; i++) pre[i] = Math.max(i ? pre[i - 1] : -Infinity, cts(i));
+  for (let i = n - 1; i >= 0; i--) suf[i] = Math.min(suf[i + 1], cts(i));
+  const ok = i => t.sync[i] && pre[i - 1] < suf[i];
+  let K = n; for (let i = 1; i < n; i++) if (ok(i) && pt(i) >= F - 1e-6) { K = i; break; }
+  let S = 0; for (let i = n - 1; i >= 1; i--) if (ok(i) && pt(i) <= Tend - F + 1e-6) { S = i; break; }
+  const regs = (N === 1 && K > S) ? [{ k: 0, s0: 0, s1: n, fin: true, fout: true }]
+    : [{ k: 0, s0: 0, s1: K, fin: true }, { k: N - 1, s0: S, s1: n, fout: true }];
+  const total = regs.reduce((a, r) => a + r.s1 - r.s0, 0);
+
+  // エンコーダー設定
+  const vBytes = t.sizes.reduce((a, b) => a + b, 0), vSec = (t.dts[n] - t.dts[0]) / t.ts;
+  const fps = n / vSec, W0 = Math.round(t.width) & ~1, H0 = Math.round(t.height) & ~1;
+  const bitrate = Math.min(60e6, Math.max(4e6, Math.round(vBytes * 8 / vSec * 1.5)));
+  let cfg = null;
+  for (const c of [...new Set([codec, "avc1.640033", "avc1.640028", "avc1.4d0033", "avc1.4d0028", "avc1.42e033", "avc1.42e028"])]) {
+    const tryCfg = { codec: c, width: W0, height: H0, bitrate, framerate: fps, avc: { format: "avc" }, latencyMode: "quality" };
+    try { const s = await VideoEncoder.isConfigSupported(tryCfg); if (s.supported) { cfg = tryCfg; break; } } catch (e) {}
+  }
+  if (!cfg) throw new Error("この端末では H.264 の書き出し（" + W0 + "×" + H0 + "）ができません。パソコンの Chrome でお試しください。");
+  const chunks = []; let newDesc = null, encErr = null, decErr = null;
+  const enc = new VideoEncoder({
+    output: (ch, md) => { const b = new Uint8Array(ch.byteLength); ch.copyTo(b); chunks.push({ b, key: ch.type === "key", ts: ch.timestamp }); if (!newDesc && md && md.decoderConfig && md.decoderConfig.description) newDesc = toU8(md.decoderConfig.description).slice(); },
+    error: e => { encErr = e; }
+  });
+  enc.configure(cfg);
+  let done = 0, cv = null, cx = null;
+  const lutY = new Uint8Array(256), lutC = new Uint8Array(256);
+  async function dim(f, a) {
+    if (f.format === "I420" || f.format === "NV12" || f.format === "I420A") {
+      try {
+        const vr = f.visibleRect, Wv = vr.width, Hv = vr.height;
+        const buf = new Uint8Array(f.allocationSize()); const layout = await f.copyTo(buf);
+        const yb = f.colorSpace && f.colorSpace.fullRange ? 0 : 16;
+        for (let v = 0; v < 256; v++) { lutY[v] = Math.round(yb + (v - yb) * a); lutC[v] = Math.round(128 + (v - 128) * a); }
+        const plane = (L, w, h, lut) => { for (let y = 0; y < h; y++) { let o = L.offset + y * L.stride; const e = o + w; for (; o < e; o++) buf[o] = lut[buf[o]]; } };
+        const cw = Math.ceil(Wv / 2), chh = Math.ceil(Hv / 2);
+        plane(layout[0], Wv, Hv, lutY);
+        if (f.format === "NV12") plane(layout[1], cw * 2, chh, lutC); else { plane(layout[1], cw, chh, lutC); plane(layout[2], cw, chh, lutC); }
+        const cs = f.colorSpace && f.colorSpace.toJSON ? f.colorSpace.toJSON() : undefined;
+        return new VideoFrame(buf, { format: f.format, codedWidth: Wv, codedHeight: Hv, timestamp: f.timestamp, duration: f.duration ?? undefined, layout, colorSpace: cs });
+      } catch (e) { /* 下のキャンバス方式へ */ }
+    }
+    const Wv = f.displayWidth, Hv = f.displayHeight;
+    if (!cv) { cv = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(Wv, Hv) : Object.assign(document.createElement("canvas"), { width: Wv, height: Hv }); cx = cv.getContext("2d"); }
+    cx.drawImage(f, 0, 0, Wv, Hv); cx.fillStyle = `rgba(0,0,0,${1 - a})`; cx.fillRect(0, 0, Wv, Hv);
+    return new VideoFrame(cv, { timestamp: f.timestamp, duration: f.duration ?? undefined });
+  }
+  for (const r of regs) {
+    let chain = Promise.resolve(), first = true, got = 0;
+    const handle = async f => {
+      try {
+        if (encErr || decErr) return;
+        const tt = f.timestamp / 1e6; let a = 1;
+        if (r.fin) a = Math.min(a, clamp01(tt / F));
+        if (r.fout) a = Math.min(a, clamp01((Tend - tt - fd) / F));
+        const out = a >= 1 ? f : await dim(f, a);
+        enc.encode(out, { keyFrame: first }); first = false; got++;
+        if (out !== f) out.close();
+      } finally { f.close(); }
+      done++; prog(done / total);
+    };
+    const dec = new VideoDecoder({ output: f => { chain = chain.then(() => handle(f)); }, error: e => { decErr = e; } });
+    dec.configure({ codec, description: avcC });
+    for (let i = r.s0; i < r.s1; i++) {
+      while ((dec.decodeQueueSize > 6 || enc.encodeQueueSize > 6) && !encErr && !decErr) await tick();
+      if (encErr || decErr) break;
+      const off = t.sampleOff[i];
+      dec.decode(new EncodedVideoChunk({ type: t.sync[i] ? "key" : "delta", timestamp: Math.round(pt(i) * 1e6), duration: Math.round(fd * 1e6), data: u.subarray(off, off + t.sizes[i]) }));
+    }
+    if (!encErr && !decErr) await dec.flush();
+    await chain; try { dec.close(); } catch (e) {}
+    if (decErr) throw new Error("映像の読み込みに失敗しました：" + (decErr.message || decErr));
+    if (got !== r.s1 - r.s0) throw new Error(`映像のコマ数が合いません（${got}/${r.s1 - r.s0}）。`);
+  }
+  await enc.flush(); enc.close();
+  if (encErr) throw new Error("映像の書き出しに失敗しました：" + (encErr.message || encErr));
+  if (chunks.length !== total || !newDesc) throw new Error(`映像の書き出しでコマ数が合いません（${chunks.length}/${total}）。`);
+
+  // サンプル差し替え表を作る
+  // 新しい SPS/PPS は元と別の番号に振り直して avcC に同居させる（途中で設定が切り替わらないので、シークしても壊れない）
+  const mg = makeParamMerger(avcC, newDesc);
+  const ov = new Array(N).fill(null); const get = k => ov[k] || (ov[k] = new Map());
+  let ci = 0;
+  for (const r of regs) {
+    const sorted = []; for (let i = r.s0; i < r.s1; i++) sorted.push(cts(i)); sorted.sort((a, b) => a - b);
+    let lastTs = -Infinity;
+    for (let j = 0; j < r.s1 - r.s0; j++, ci++) {
+      const c = chunks[ci], i = r.s0 + j;
+      if (c.ts <= lastTs) throw new Error("この端末のエンコーダーはコマの並べ替えをするため対応できません。パソコンの Chrome でお試しください。");
+      lastTs = c.ts;
+      const data = mg.rewriteSample(c.b);
+      get(r.k).set(i, { rel: push(data), size: data.length, desc: 1, sync: c.key, cto: Math.max(0, sorted[j] - t.dts[i]) });
+    }
+  }
+  // サンプル記述（avc1）の avcC だけを差し替える
+  const kids = entryChildren(u, e0, 78).map(c => c.type === "avcC" ? box("avcC", mg.merged) : u.subarray(c.start, c.start + c.size));
+  const entry0 = box(e0.type, concat([u.subarray(e0.start + 8, e0.start + 8 + 78), ...kids]));
+  return { ov, extra: null, entry0 };
+}
+
+async function decodeAAC(cfg, samples) { // → { ch: Float32Array[], len }
+  const outs = []; let err = null;
+  const dec = new AudioDecoder({ output: ad => { const nf = ad.numberOfFrames, nc = ad.numberOfChannels, planes = [];
+      try { for (let c = 0; c < nc; c++) { const p = new Float32Array(nf); ad.copyTo(p, { planeIndex: c, format: "f32-planar" }); planes.push(p); } }
+      catch (e) { const il = new Float32Array(nf * nc); ad.copyTo(il, { planeIndex: 0, format: "f32" }); for (let c = 0; c < nc; c++) { const p = new Float32Array(nf); for (let i = 0; i < nf; i++) p[i] = il[i * nc + c]; planes.push(p); } }
+      outs.push(planes); ad.close(); }, error: e => { err = e; } });
+  dec.configure(cfg);
+  let ts = 0;
+  for (const s of samples) { while (dec.decodeQueueSize > 32 && !err) await tick(); if (err) break; dec.decode(new EncodedAudioChunk({ type: "key", timestamp: ts, data: s })); ts += 21333; }
+  if (!err) await dec.flush(); try { dec.close(); } catch (e) {}
+  if (err) throw err;
+  const nc = cfg.numberOfChannels, len = outs.reduce((a, p) => a + p[0].length, 0);
+  const ch = []; for (let c = 0; c < nc; c++) { const a = new Float32Array(len); let o = 0; for (const p of outs) { a.set(p[Math.min(c, p.length - 1)], o); o += p[0].length; } ch.push(a); }
+  return { ch, len };
+}
+async function encodeAAC(cfg, ch, len) { // → { chunks: Uint8Array[], desc }
+  const chunks = []; let desc = null, err = null;
+  const enc = new AudioEncoder({ output: (c, md) => { const b = new Uint8Array(c.byteLength); c.copyTo(b); chunks.push(b); if (!desc && md && md.decoderConfig && md.decoderConfig.description) desc = toU8(md.decoderConfig.description).slice(); }, error: e => { err = e; } });
+  enc.configure(cfg);
+  const nc = cfg.numberOfChannels, B = 4096;
+  for (let o = 0; o < len && !err; o += B) {
+    const m = Math.min(B, len - o), data = new Float32Array(m * nc);
+    for (let c = 0; c < nc; c++) data.set(ch[c].subarray(o, o + m), c * m);
+    while (enc.encodeQueueSize > 16 && !err) await tick();
+    enc.encode(new AudioData({ format: "f32-planar", sampleRate: cfg.sampleRate, numberOfFrames: m, numberOfChannels: nc, timestamp: Math.round(o / cfg.sampleRate * 1e6), data }));
+  }
+  if (!err) await enc.flush(); try { enc.close(); } catch (e) {}
+  if (err) throw err;
+  return { chunks, desc };
+}
+
+async function fadeAudio(A, t, N, F, Tend, push, prog) {
+  const u = A.u;
+  if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") throw new Unsupported("このブラウザは音声の作り直しに対応していません");
+  const e0 = t.stsdEntries[0];
+  if (!e0 || e0.type !== "mp4a") throw new Unsupported("AAC以外の音声");
+  const { ch: nc0, info } = audioEntryInfo(u, e0);
+  if (!info || info.objType !== 0x40 || info.ascStart < 0) throw new Unsupported("AAC以外の音声");
+  const asc = u.slice(info.ascStart, info.ascStart + info.ascLen);
+  const aot = asc[0] >> 3; if (aot !== 2) throw new Unsupported("AAC-LC以外の音声");
+  const codec = "mp4a.40.2", sr = t.ts, nc = nc0 || 2, n = t.nSamples;
+  const FS = n > 1 ? (t.dts[1] - t.dts[0]) : 1024; // 1フレームのサンプル数（最後のフレームは短く記録されることがあるので先頭で見る）
+  const aBytes = t.sizes.reduce((a, b) => a + b, 0), aSec = (t.dts[n] - t.dts[0]) / sr;
+  const bitrate = Math.min(320000, Math.max(128000, Math.round(aBytes * 8 / aSec / 32000) * 32000));
+  const ecfg = { codec, sampleRate: sr, numberOfChannels: nc, bitrate };
+  try { const s = await AudioEncoder.isConfigSupported(ecfg); if (!s.supported) throw 0; } catch (e) { throw new Unsupported("この端末ではAACの書き出しができません"); }
+  const dcfg = { codec, sampleRate: sr, numberOfChannels: nc, description: asc };
+  try { const s = await AudioDecoder.isConfigSupported(dcfg); if (!s.supported) throw 0; } catch (e) { throw new Unsupported("AACを読み込めません"); }
+
+  // 1) マスター音声をデコード
+  const samples = []; for (let i = 0; i < n; i++) samples.push(u.subarray(t.sampleOff[i], t.sampleOff[i] + t.sizes[i]));
+  const D = await decodeAAC(dcfg, samples); prog(0.3);
+  const L = n * FS, d0 = Math.max(0, L - D.len);
+  // 2) エンコーダー＋デコーダーの遅れを測る（ノイズを通して位置合わせ）
+  const tl = FS * 24, p0 = FS * 6 + 123, bl = 2048, test = []; let seed = 7;
+  const noise = new Float32Array(bl); for (let i = 0; i < bl; i++) { seed = (seed * 1103515245 + 12345) >>> 0; noise[i] = ((seed >>> 8) / 16777216 - 0.5) * 0.6; }
+  for (let c = 0; c < nc; c++) { const a = new Float32Array(tl); a.set(noise, p0); test.push(a); }
+  const te = await encodeAAC(ecfg, test, tl);
+  if (!te.desc) te.desc = asc;
+  const td = await decodeAAC({ ...dcfg, description: te.desc }, te.chunks);
+  let best = -Infinity, delta = 0; const o0 = td.ch[0];
+  for (let lag = -FS * 2; lag <= FS * 8; lag++) { let s = 0; for (let i = 0; i < bl; i += 2) { const j = p0 + i + lag; if (j >= 0 && j < o0.length) s += o0[j] * noise[i]; } if (s > best) { best = s; delta = lag; } }
+  prog(0.4);
+  // 3) 区間を決める
+  const E = t.elstMediaTime;
+  const P = 3, LA = 4;
+  const Ka = Math.min(n, Math.ceil((F * sr + E) / FS) + 2), Sa = Math.max(0, Math.floor(((Tend - F) * sr + E) / FS) - 2);
+  const regs = (N === 1 && Ka > Sa) ? [{ k: 0, s0: 0, s1: n, fin: true, fout: true }]
+    : [{ k: 0, s0: 0, s1: Ka, fin: true }, { k: N - 1, s0: Sa, s1: n, fout: true }];
+  const raw = (c, x) => { const j = x - d0; return j >= 0 && j < D.len ? D.ch[c][j] : 0; };
+  const curve = x => x * x;
+  const Tf = (r, c, x) => { // コピー内の位置 x（真の時間軸）での目標波形
+    if (x < 0) return r.k > 0 ? raw(c, x + L) : 0;
+    if (x >= L) return r.k < N - 1 ? raw(c, x - L) : 0;
+    const tt = (x - E) / sr; let g = 1;
+    if (r.fin) g = Math.min(g, curve(clamp01(tt / F)));
+    if (r.fout) g = Math.min(g, curve(clamp01((Tend - tt) / F)));
+    return g * raw(c, x);
+  };
+  const ov = new Array(N).fill(null); let newDesc = null, ri = 0;
+  for (const r of regs) {
+    const cnt = r.s1 - r.s0, base = (r.s0 - P) * FS, len = (cnt + P + LA) * FS;
+    const I = []; for (let c = 0; c < nc; c++) { const a = new Float32Array(len); for (let m = 0; m < len; m++) a[m] = Tf(r, c, base + m + d0 + delta); I.push(a); }
+    const er = await encodeAAC(ecfg, I, len);
+    if (er.chunks.length < P + cnt) throw new Unsupported("音声の書き出し量が不足");
+    const desc = er.desc || te.desc;
+    // 検証：作り直した音声が狙いどおりの位置に並んでいるか
+    const chk = await decodeAAC({ ...dcfg, description: desc }, er.chunks);
+    let es = 0, ss2 = 0;
+    for (let n2 = P * FS; n2 < (P + cnt) * FS && n2 < chk.len; n2++) { const want = Tf(r, 0, base + n2 + d0); const d = chk.ch[0][n2] - want; es += d * d; ss2 += want * want; }
+    if (ss2 > 1e-6 && es / ss2 > 0.5) throw new Unsupported("音声の位置合わせを確認できませんでした");
+    newDesc = newDesc || desc;
+    const m = ov[r.k] || (ov[r.k] = new Map());
+    for (let j = 0; j < cnt; j++) { const b = er.chunks[P + j]; m.set(r.s0 + j, { rel: push(b), size: b.length, desc: 0, sync: true, cto: 0 }); }
+    prog(0.4 + 0.6 * (++ri) / regs.length);
+  }
+  let descIdx = 1, extra = null;
+  // AAC-LC の生フレームは「プロファイル・周波数・ch数」（先頭2バイト）が同じなら元の設定のまま読める
+  const same = newDesc.length >= 2 && newDesc[0] === asc[0] && newDesc[1] === asc[1];
+  if (!same) {
+    const skip = (e0.start + 8 + 28) - e0.start; // 標準の AudioSampleEntry
+    const ver = (u[e0.start + 16] << 8) | u[e0.start + 17]; if (ver !== 0) throw new Unsupported("音声の設定形式が異なります");
+    const dl = L2 => L2 < 128 ? [L2] : [0x80 | (L2 >> 7), L2 & 127];
+    const dsi = [5, ...dl(newDesc.length), ...newDesc];
+    const dcd = [0x40, 0x15, 0, 0, 0, ...[24, 16, 8, 0].map(s => (bitrate >>> s) & 255), ...[24, 16, 8, 0].map(s => (bitrate >>> s) & 255), ...dsi];
+    const esd = [0, 0, 0, 4, ...dl(dcd.length), ...dcd, 6, 1, 2];
+    const esds = box("esds", new Uint8Array([0, 0, 0, 0, 3, ...dl(esd.length), ...esd]));
+    const kids = entryChildren(u, e0, skip - 8).filter(c => c.type !== "esds" && c.type !== "btrt").map(c => u.subarray(c.start, c.start + c.size));
+    extra = box("mp4a", concat([u.subarray(e0.start + 8, e0.start + skip), esds, ...kids])); descIdx = t.stsdEntries.length + 1;
+  }
+  for (const m of ov) if (m) for (const o of m.values()) o.desc = descIdx;
+  return { ov, extra };
+}
+
+async function buildFaded(A, N, F, Tend, onProg) {
+  const app = []; let appLen = 0;
+  const push = b => { const rel = appLen; app.push(b); appLen += b.length; return rel; };
+  const mods = new Map(), notes = [];
+  const v = A.tracks.find(t => t.handler === "vide"), a = A.tracks.find(t => t.handler === "soun");
+  if (v) mods.set(v, await fadeVideo(A, v, N, F, Tend, push, p => onProg(p * (a ? 0.75 : 1), "映像")));
+  if (a) {
+    const save = [app.length, appLen];
+    try { mods.set(a, await fadeAudio(A, a, N, F, Tend, push, p => onProg(0.75 + 0.25 * p, "音声"))); }
+    catch (e) { app.length = save[0]; appLen = save[1]; if (e instanceof Unsupported || (e && e.name === "NotSupportedError")) notes.push("音声のフェードはこの環境では作れなかったため、映像だけフェードしています（" + e.message + "）。"); else throw e; }
+  }
+  return { blob: buildOutput(A, N, mods, app, appLen), notes };
 }
 
 // ---------- 表示用 ----------
@@ -383,7 +870,7 @@ const fmtB = b => b >= 1e9 ? (b / 1e9).toFixed(2) + " GB" : b >= 1e6 ? (b / 1e6)
 const $ = id => document.getElementById(id);
 const CODEC = { avc1: "H.264", avc3: "H.264", hvc1: "H.265", hev1: "H.265", mp4a: "AAC", "Opus": "Opus", ac_3: "AC-3", av01: "AV1", vp09: "VP9" };
 
-let A = null, fileName = "", masterSec = 120, lastBlob = null, lastUrl = null, targetMin = 60;
+let A = null, fileName = "", masterSec = 120, lastBlob = null, lastUrl = null, targetMin = 60, fadeSec = 0;
 let downloads = null;
 try { if (window.claude && window.claude.use) window.claude.use("downloads").then(d => { downloads = d; }).catch(() => {}); } catch (e) {}
 
@@ -395,7 +882,7 @@ function updateEq() {
   const shown = Math.min(N, 120); const strip = $("strip"); strip.replaceChildren();
   for (let i = 0; i < shown; i++) strip.appendChild(document.createElement("i"));
   if (A) { const est = A.u.length - A.span + A.span * N; const perHour = (A.u.length / masterSec) * 3600; $("eqSize").textContent = `出力サイズの目安：約 ${fmtB(est)}（マスター ${fmtB(A.u.length)} × ${N}）　1時間あたり約 ${fmtB(perHour)}` + (est > 1e9 ? "　⚠ 1GBを超えます。マスターをもっと軽く書き出してください（2分あたり14MB以下が目安）" : "") + (N > 120 ? "　※帯は先頭120区間まで表示" : ""); $("eqSize").style.color = est > 1e9 ? "var(--warn)" : ""; }
-  [...document.querySelectorAll(".chip")].forEach(c => c.setAttribute("aria-pressed", String(Math.round(+c.dataset.min * 60 / masterSec) === N && Math.abs(+c.dataset.min * 60 - masterSec * N) < masterSec / 2)));
+  [...document.querySelectorAll("#chips .chip")].forEach(c => c.setAttribute("aria-pressed", String(Math.round(+c.dataset.min * 60 / masterSec) === N && Math.abs(+c.dataset.min * 60 - masterSec * N) < masterSec / 2)));
 }
 function setFromTarget(min) { targetMin = min; $("count").value = Math.max(1, Math.round(min * 60 / masterSec)); updateEq(); }
 
@@ -430,7 +917,7 @@ async function loadFile(f) {
     showFacts(A, f);
     setFromTarget(targetMin);
     const base = f.name.replace(/\.[^.]+$/, "");
-    $("outname").value = `${base}_x${$("count").value}.mp4`;
+    syncName();
     st.textContent = "準備ができました。"; $("go").disabled = false;
   } catch (e) { A = null; st.className = "status err"; st.textContent = e.message; $("facts").hidden = true; $("checks").hidden = true; updateEq(); }
 }
@@ -469,8 +956,15 @@ async function run() {
   await new Promise(r => setTimeout(r, 30));
   try {
     const t0 = performance.now();
-    const blob = buildOutput(A, N);
-    $("bar").style.width = "80%";
+    let blob, notes = [];
+    const F = fadeSec;
+    if (F > 0) {
+      if (F * 2 > masterSec * N) throw new Error("フェードが仕上がりの長さに対して長すぎます。秒数を短くしてください。");
+      $("bar").style.width = "0%";
+      const r = await buildFaded(A, N, F, masterSec, (p, what) => { $("bar").style.width = Math.round(p * 90) + "%"; st.textContent = `フェード部分を作り直し中（${what}）… ${Math.round(p * 100)}%`; });
+      blob = r.blob; notes = r.notes;
+    } else blob = buildOutput(A, N);
+    $("bar").style.width = "92%";
     if (lastUrl) URL.revokeObjectURL(lastUrl);
     lastBlob = blob; lastUrl = URL.createObjectURL(blob);
     const name = outName();
@@ -481,7 +975,7 @@ async function run() {
       msg = "下の「ダウンロード」で保存してください。うまくいかない時は「共有して保存」から「ファイルに保存」を選んでください。";
       $("again").textContent = "ダウンロード"; $("share").hidden = false;
     }
-    st.textContent = `完成：${fmt(masterSec * N)}・${fmtB(blob.size)}（${((performance.now() - t0) / 1000).toFixed(1)}秒）。${msg}`;
+    st.textContent = `完成：${fmt(masterSec * N)}・${fmtB(blob.size)}${F ? `・フェード${F}秒` : ""}（${((performance.now() - t0) / 1000).toFixed(1)}秒）。${msg}` + (notes.length ? "　⚠ " + notes.join(" ") : "");
     $("again").hidden = false;
     const vid = $("vid"); vid.removeAttribute("src"); vid.load(); $("preview").hidden = false;   // 再生は確認ボタンを押した時だけ読み込む
   } catch (e) { st.className = "status err"; st.textContent = e.message; $("bar").style.width = "0"; }
@@ -496,7 +990,12 @@ const drop = $("drop");
 drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
 $("chips").addEventListener("click", e => { const c = e.target.closest(".chip"); if (!c) return; setFromTarget(+c.dataset.min); syncName(); });
 $("count").addEventListener("input", () => { updateEq(); syncName(); });
-function syncName() { if (!fileName) return; const base = fileName.replace(/\.[^.]+$/, ""); $("outname").value = `${base}_x${parseInt($("count").value, 10) || 1}.mp4`; }
+$("fadeChips").addEventListener("click", e => { const c = e.target.closest(".chip"); if (!c) return;
+  fadeSec = +c.dataset.fade;
+  [...$("fadeChips").querySelectorAll(".chip")].forEach(x => x.setAttribute("aria-pressed", String(x === c)));
+  $("fadeNote").textContent = fadeSec ? `最初の${fadeSec}秒と最後の${fadeSec}秒だけ作り直し、残りは今まで通りそのままつなぎます。作り直しに数十秒〜数分かかります（パソコンの Chrome がおすすめ）。` : "再エンコードなしで連結します。数秒で完了します。";
+  syncName(); });
+function syncName() { if (!fileName) return; const base = fileName.replace(/\.[^.]+$/, ""); $("outname").value = `${base}_x${parseInt($("count").value, 10) || 1}${fadeSec ? "_fade" + fadeSec + "s" : ""}.mp4`; }
 $("go").addEventListener("click", run);
 $("again").addEventListener("click", async () => {
   if (!lastBlob) return;
@@ -509,9 +1008,10 @@ function seekTo(t) {
   const go = () => { v.currentTime = t; v.play().catch(() => {}); };
   if (v.getAttribute("src") !== lastUrl) { v.src = lastUrl; v.addEventListener("loadedmetadata", go, { once: true }); } else go();
 }
+$("seekStart").addEventListener("click", () => seekTo(0));
 $("seekSeam").addEventListener("click", () => seekTo(Math.max(0, masterSec - 5)));
 $("seekEnd").addEventListener("click", () => seekTo(Math.max(0, masterSec * (parseInt($("count").value, 10) || 1) - 30)));
 updateEq();
-window.__loop = { analyze, buildOutput };
+window.__loop = { analyze, buildOutput, buildFaded };
 })();
 </script>
